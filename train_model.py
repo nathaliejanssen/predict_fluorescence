@@ -61,7 +61,7 @@ def main():
     number_of_slices = 5
     bs = 1
 
-    df_train = create_image_path_df("Data/Procssed/spheroids_png_crop")
+    df_train = create_image_path_df("Data/Processed/spheroids_png_crop")
     df_train['plane'] = df_train['brightfield'].apply(lambda x: int(x.split('-')[0].split('p')[-1]))
     df_train = df_train[(df_train.plane <= (df_train.plane.max() - (number_of_slices//2))) & (df_train.plane >= (df_train.plane.min() + (number_of_slices//2)))]
     df_train['number_of_slices'] = number_of_slices
