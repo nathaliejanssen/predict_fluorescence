@@ -18,41 +18,32 @@ def create_image_path_df(path_to_imgfolder):
 
     return df_imgs
 
-def read_imgs(nucleus, brightfield, plane, number_of_slices, plane_string):
-    # Define plane first image in the stack
-    start = plane - int(number_of_slices/2)
-    
-    if start < 10:
-        start_string = tf.strings.format('p0{}', start)
-    else:
-        start_string = tf.strings.format('p{}', start)
+def read_imgs(nucleus, brightfield, plane, number_of_slices):
+    start_plane = plane - (number_of_slices // 2)
+    imgs = tf.TensorArray(tf.float32, size = number_of_slices)
 
-    # Prepare stack of bf images
-    imgs = tf.TensorArray(tf.float32, size=number_of_slices)
-    
     for i in range(number_of_slices):
-        fn = tf.strings.regex_replace(brightfield, plane_string, start_string)
-
-        if i > 0:
-            if start < 10:
-                next_plane = tf.strings.format('p0{}', start+i)
+        if i == 0:
+            if start_plane < 10:
+                fn = tf.strings.regex_replace(brightfield, tf.strings.format('p0{}', plane) if plane < 10 else tf.strings.format('p{}', plane), tf.strings.format('p0{}', start_plane))
             else:
-                next_plane = tf.strings.format('p{}', start+i)
-            
-            fn = tf.strings.regex_replace(fn, start_string, next_plane)
+                fn = tf.strings.regex_replace(brightfield, tf.strings.format('p0{}', plane) if plane < 10 else tf.strings.format('p{}', plane), tf.strings.format('p{}', start_plane))
+        else:
+            if start_plane < 10:
+                fn = tf.strings.regex_replace(brightfield, tf.strings.format('p0{}', plane) if plane < 10 else tf.strings.format('p{}', plane), tf.strings.format('p0{}', start_plane+i))
+            else:
+                fn = tf.strings.regex_replace(brightfield, tf.strings.format('p0{}', plane) if plane < 10 else tf.strings.format('p{}', plane), tf.strings.format('p{}', start_plane+i))
 
-        img = tf.io.decode_png(tf.io.read_file(fn), channels=1, dtype=tf.uint16) 
+        img = tf.io.decode_png(tf.io.read_file(fn), channels = 1, dtype = tf.uint16) 
         img = tf.image.convert_image_dtype(img, tf.float32)
-        img = tf.image.resize_with_crop_or_pad(img, 848, 848)
+        img = tf.image.resize_with_crop_or_pad(img, 848, 848)   # otherwise it won't work in the current unet architecture
         imgs = imgs.write(i, tf.squeeze(img))
-
     bfimg = imgs.stack()    
-    bfimg = tf.transpose(bfimg, perm=[1,2,0])
+    bfimg = tf.transpose(bfimg, perm = [1,2,0])
 
-    # Prepare fluorescent target
-    fluo_target = tf.io.decode_png(tf.io.read_file(nucleus), channels=1,dtype=tf.uint16)
+    fluo_target = tf.io.decode_png(tf.io.read_file(nucleus), channels = 1,dtype = tf.uint16)
     fluo_target = tf.image.convert_image_dtype(fluo_target, tf.float32)
-    fluo_target = tf.image.resize_with_crop_or_pad(fluo_target, 848, 848)
+    fluo_target = tf.image.resize_with_crop_or_pad(fluo_target, 848, 848)   # otherwise it won't work in the current unet architecture
 
     return bfimg, fluo_target
 
@@ -62,30 +53,26 @@ def main():
 
     df_train = create_image_path_df("Data/Processed/spheroids_png_crop")
     df_train['plane'] = df_train['brightfield'].apply(lambda x: int(x.split('-')[0].split('p')[-1]))
-    df_train['plane_string'] = df_train['brightfield'].apply(lambda x: str(x.split('-')[0].split('f01')[-1]))
-    df_train = df_train[(df_train.plane<29) & (df_train.plane>2)]   # TODO: this is dependent on the stack that is provided. Now this is specific for this data set. 
+    df_train = df_train[(df_train.plane <= (df_train.plane.max() - (number_of_slices//2))) & (df_train.plane >= (df_train.plane.min() + (number_of_slices//2)))]
     df_train['number_of_slices'] = number_of_slices
-    df_train = df_train.astype({col: 'int32' for col in df_train.select_dtypes('int64').columns})       # convert to int32
+    df_train = df_train.astype({col: 'int32' for col in df_train.select_dtypes('int64').columns})
 
-    training_df = df_train[0:26]
+    training_df = df_train[0:26]    # NOTE: this is ONLY for the pilot
     testing_df = df_train[26:]
 
     ds_train = tf.data.Dataset.from_tensor_slices((training_df['nucleus'],
                                                     training_df['brightfield'], 
                                                     training_df['plane'],
-                                                    training_df['number_of_slices'],
-                                                    training_df['plane_string']))
+                                                    training_df['number_of_slices']))
     ds_train = ds_train.map(read_imgs)
     ds_train = ds_train.batch(batch_size = bs, drop_remainder = True)
-    ds_train = ds_train.repeat()                # Repeats dataset indefinitely
-    ds_train = ds_train.prefetch(buffer_size = tf.data.AUTOTUNE) # Improves latency & throughput, at the cost of using additional memory to store prefetched elements
-
+    ds_train = ds_train.repeat()
+    ds_train = ds_train.prefetch(buffer_size = tf.data.AUTOTUNE)
 
     ds_test = tf.data.Dataset.from_tensor_slices((testing_df['nucleus'],
                                                     testing_df['brightfield'], 
                                                     testing_df['plane'],
-                                                    testing_df['number_of_slices'],
-                                                    testing_df['plane_string']))
+                                                    testing_df['number_of_slices']))
     ds_test = ds_test.map(read_imgs)
     ds_test = ds_test.batch(batch_size = bs, drop_remainder = True)
     ds_test = ds_test.prefetch(buffer_size = tf.data.AUTOTUNE) 
